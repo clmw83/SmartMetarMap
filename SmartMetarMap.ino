@@ -1,18 +1,22 @@
 
 
-// This project is based on https://github.com/ironcannibal/led-sectional
-// I added some smart-home bits, letting it be controlled by AdafruitIO (and thus by google home)
+// This project is based on https://github.com/ironcannibal/led-sectional (and all the projects that came before)
+// I added some smart-home bits, letting it be controlled by MQTT messages like a light
+// I enabled google assistant control by using IFTTT and the adafruit.io service:
+// Google assistant voice commands send commands (brightness/on/off) to an adafruit.io feed.  I then bridge my
+// local MQTT broker with Adafruit.io.
 
 #include <ESP8266WiFi.h>
-#include <PubSubClient.h>
+#include <PubSubClient.h>  // For MQTT
 
 #define FASTLED_ESP8266_RAW_PIN_ORDER
 #include <FastLED.h>
 #include <vector>
 using namespace std;
+
+// Save personal stuff (wifi settings / MQTT servers, etc.) in config.h
 #include "config.h"
 
-#define CYCLE_TIME 50
 /*--------------------------- METAR MAP CONFIG -------------------*/
 
 #define NUM_AIRPORTS 2 //
@@ -21,15 +25,11 @@ using namespace std;
 #define LIGHTNING_DURATION 1000 // what length of time do lightning clusters take
 #define LIGHTNING_BLINK_TIME 50 //ms - how long a lightning strike is
 
-#define DO_LIGHTNING true // Lightning uses more power, but is cool.
+#define DO_LIGHTNING true // Lightning is cool.
 #define DO_WINDS true // color LEDs for high winds
 
 #define SERVER "www.aviationweather.gov"
 #define BASE_URI "/adds/dataserver_current/httpparam?dataSource=metars&requestType=retrieve&format=xml&hoursBeforeNow=3&mostRecentForEachStation=true&stationString="
-
-#define DEBUG false
-boolean ledStatus = true; // used so leds only indicate connection status on first boot, or after failure
-int status = WL_IDLE_STATUS;
 
 #define READ_TIMEOUT 15 // Cancel query if no data received (seconds)
 #define WIFI_TIMEOUT 60 // in seconds
@@ -71,7 +71,7 @@ unsigned long last_status;
 
 // Set up some state variables for what our map is currently doing
 bool map_on = true;
-int map_brightness = 100;
+int map_brightness = 5;
 bool first_mqtt = true;  // This is here to enable our map to return to its last state at power-on
 
 
@@ -85,25 +85,18 @@ void callback(char* p_topic, byte* p_payload, unsigned int p_length);  // Callba
 bool getMetars();  // gets the metars...
 void doColor(String identifier, unsigned short int led, int wind, int gusts, String condition, String wxstring); // Used to set the appropriate LED colors
 
+void wifi_connect();
 
 void setup() {
   
   Serial.begin(115200);
 
-  // Connect to WiFi access point.
-  Serial.println(); Serial.println();
-  Serial.print("Connecting to ");
-  Serial.println(WLAN_SSID);
-  WiFi.begin(WLAN_SSID, WLAN_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println();
+  // Initialize LEDs
+  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_AIRPORTS).setCorrection(TypicalLEDStrip);
+  FastLED.setBrightness(MAX_BRIGHTNESS);
 
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  // Connect to WiFi access point.
+  wifi_connect();
 
   Serial.println("Using SSL _without_ fingerprint verification for getting METARS");
   client.setInsecure();
@@ -117,12 +110,7 @@ void setup() {
       mclient.setInsecure();
     #endif
   #endif
-
-
-  // Initialize LEDs
-  FastLED.addLeds<LED_TYPE, DATA_PIN, COLOR_ORDER>(leds, NUM_AIRPORTS).setCorrection(TypicalLEDStrip);
-  FastLED.setBrightness(MAX_BRIGHTNESS);
-
+  
   mqtt.setServer(MQTT_SERVER, MQTT_PORT);
   mqtt.setCallback(callback);
 
@@ -135,10 +123,12 @@ void setup() {
 
 void loop() {
 
-  const unsigned long millis_now = millis();
+  wifi_connect(); // Check if we are connected and reconnect if need be
 
+  const unsigned long millis_now = millis();  // Save our current timestamp for this loop iteration
+  
   // If our timer runs out, it is time to refresh METARS
-  if (millis_now - last_updated >= wait_ticks) {
+  if (millis_now - last_updated >= wait_ticks) {  // both unsigned longs, so avoids overflow issues at ~50 days
     Serial.println("Getting METARs ...");
     last_updated=millis_now;
     if (getMetars()) {
@@ -176,6 +166,37 @@ void loop() {
   yield();
   delay(10);
 }
+
+void wifi_connect() {
+  if (WiFi.status() != WL_CONNECTED){
+
+    // Set LEDs to Orange to indicate no connection
+    fill_solid(leds, NUM_AIRPORTS, CRGB::Orange);
+    FastLED.show();
+    Serial.println();
+    WiFi.persistent(false);
+    WiFi.mode(WIFI_STA);
+    Serial.println();
+    Serial.print("Connecting to ");
+    Serial.println(WLAN_SSID);
+    WiFi.begin(WLAN_SSID, WLAN_PASS);
+    int i =0;
+    while (WiFi.status() != WL_CONNECTED) {
+      delay(500);
+      Serial.print(".");
+      i++;
+      if (i>=50){
+        Serial.println("Failed to connect to Wifi... restarting");
+        ESP.restart();
+      }
+    }
+    Serial.println("");
+    Serial.println("WiFi connected");
+    Serial.println("IP address: ");
+    Serial.println(WiFi.localIP());
+  }
+}
+
 
 void MQTT_connect() {
   if (!mqtt.connected()) {
@@ -408,7 +429,6 @@ bool getMetars() {
         Serial.println("---Timeout---");
         fill_solid(leds, NUM_AIRPORTS, CRGB::Cyan); // indicate status with LEDs
         FastLED.show();
-        ledStatus = true;
         client.stop();
         return false;
       }
