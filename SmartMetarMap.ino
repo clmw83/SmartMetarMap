@@ -72,7 +72,7 @@ unsigned long last_status;
 // Set up some state variables for what our map is currently doing
 bool map_on = true;
 int map_brightness = 5;
-bool first_mqtt = true;  // This is here to enable our map to return to its last state at power-on
+bool first_mqtt = true;  // This is here to enable our map to return to its last state at power-on (whatever retained MQTT command the broker has)
 
 
 // Function prototypes
