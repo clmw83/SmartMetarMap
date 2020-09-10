@@ -466,7 +466,7 @@ void doColor(String identifier, unsigned short int led, int wind, int gusts, Str
   Serial.print(" WX: ");
   Serial.println(wxstring);
 
-  if (condition == "LIFR" || identifier == "LIFR") color = CRGB::Magenta;
+  if (condition == "LIFR") color = CRGB::Magenta;
   else if (condition == "IFR") color = CRGB::Red;
   else if (condition == "MVFR") color = CRGB::Blue;
   else if (condition == "VFR") {
